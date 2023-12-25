@@ -1,131 +1,6 @@
-#include "headers.h"
+#include "DataStructures.h"
 int msgq_generator;
-struct process_recieved
-{
-    int arrivaltime;
-    int priority;
-    int runningtime;
-    int id;
-};
-struct process
-{
-    int arrivaltime;
-    int priority;
-    int runningtime;
-    int id;
-    int pid;
-    //for statistics
-    int wait_time;
-    int start_time;
-    int remaining_time;
-    int end_time;
-    int state; //0 for stopped 1 for running
-};
-//priority queue 
-struct node
-{
-    struct process Process;
-    int priority;
-    struct node* next;
-    struct node* prev; //added for less complexity on enqueue
-};
-struct priority_queue
-{
-    struct node* head;
-    int n;
-    struct node* tail;
-};
-void enqueue(struct priority_queue* q, struct process Process, int priority) {
-    struct node* new_node = (struct node*)malloc(sizeof(struct node));
-    new_node->Process = Process;
-    new_node->priority = priority;
-    new_node->next = NULL;
-    new_node->prev = NULL;
 
-    // If the queue is empty
-    if (q->n == 0) {
-        q->head = new_node;
-        q->tail = new_node;
-    } else {
-        struct node* temp = q->head;
-
-        // Traverse to find the correct position
-        while (temp != NULL && temp->priority <= priority) {
-            temp = temp->next;
-        }
-
-        // Inserting at the beginning
-        if (temp == q->head) {
-            new_node->next = q->head;
-            q->head->prev = new_node;
-            q->head = new_node;
-        }
-        // Inserting at the end
-        else if (temp == NULL) {
-            q->tail->next = new_node;
-            new_node->prev = q->tail;
-            q->tail = new_node;
-        }
-        // Inserting in the middle
-        else {
-            new_node->next = temp;
-            new_node->prev = temp->prev;
-            temp->prev->next = new_node;
-            temp->prev = new_node;
-        }
-    }
-    q->n++;
-}
-struct process dequeue(struct priority_queue* q)
-{
-    struct process Process;
-    Process.id=-1;
-    if(q->n==0)
-    {
-        return Process;
-    }
-    Process=q->head->Process;
-    struct node* temp=q->head;
-    q->head=q->head->next;
-    if (q->head != NULL) {
-        q->head->prev = NULL;
-    }
-    free(temp);
-    q->n--;
-    if(q->n==0)
-    {
-        q->tail=NULL;
-    }
-    return Process;
-}
-struct process peek(struct priority_queue q)
-{
-    struct process Process;
-    Process.id=-1;
-    if(q.n==0)
-    {
-        return Process;
-    }
-    Process=q.head->Process;
-    return Process;
-}
-void print_queue(struct priority_queue q)
-{
-    struct node* temp=q.head;
-    while(temp!=NULL)
-    {
-        printf("process id %d->",temp->Process.id);
-        temp=temp->next;
-    }
-    if(q.n!=0)
-    printf("\n");
-}
-//end of priority queue
-struct msgbuff_gen
-{
-    long mtype;
-    struct process_recieved proc;
-};
 struct process_recieved recieveMessage(int msgq)
 {
     struct process_recieved Process;
@@ -141,17 +16,19 @@ struct process_recieved recieveMessage(int msgq)
 /// global vars
 int current_time=0;
 struct priority_queue q;
+struct process* waiting_list;
+int waiting_list_size=0;
 struct process currently_running;
     //vars for statistics 
-    FILE*scheduler_log,*scheduler_perf;
+    FILE*scheduler_log,*scheduler_perf,*scheduler_mem;
     int total_waiting_time=0;
     int finished_process=0;
     int total_running_time=0;
     int* TA;
     float* WTA;
-
-
     //end of statistics vars
+    //memory tree head
+    struct mem_node* head;
 //end of global vars
 void process_end(int signum)
 {
@@ -161,6 +38,10 @@ void run_p(struct process Process);
 void stop_p(struct process Process);
 void removeProcess()
 {
+    //memory freeing
+    fprintf(scheduler_mem,"At time %d freed %d bytes from process %d ",current_time,currently_running.memsize,currently_running.id);
+    remove_mem(head,currently_running.id,scheduler_mem);
+    //
     TA[finished_process]=current_time-currently_running.arrivaltime;
     WTA[finished_process]=(1.0*TA[finished_process])/(currently_running.runningtime*1.0);
     total_waiting_time+=currently_running.wait_time;
@@ -244,6 +125,24 @@ void RR(int current_time,const int quantum)
     }
 
 }
+//this function inserts the process in the waiting list ,later a function will try to allocate it in memory
+void insert_waiting_list(struct process Process)
+{
+    waiting_list_size++;
+    waiting_list=(struct process*)realloc(waiting_list,waiting_list_size*sizeof(struct process));
+    waiting_list[waiting_list_size-1]=Process;
+    
+}
+void remove_waiting_list(int index)
+{
+    for(int i=index;i<waiting_list_size-1;i++)
+    {
+        waiting_list[i]=waiting_list[i+1];
+    }
+    waiting_list_size--;
+    waiting_list=(struct process*)realloc(waiting_list,waiting_list_size*sizeof(struct process));
+}
+//this function checks if any process from the waiting list can be allocated in memory
 
 int main(int argc, char * argv[])
 {
@@ -252,6 +151,8 @@ int main(int argc, char * argv[])
     q.tail=NULL;
     q.n=0;
     currently_running.id=-1;
+    //memory tree initializations
+    head=create_node(1024,0,0,1023,NULL);
     //argv[1] is the scheduling algo //argv[2] is its parameters
     signal(SIGUSR1, process_end);
     key_t key=ftok("key",genSchedulerQ);
@@ -263,6 +164,7 @@ int main(int argc, char * argv[])
     //initiate the statistics
     scheduler_log=fopen("scheduler.log","w");
     scheduler_perf=fopen("scheduler.perf","w");
+    scheduler_mem=fopen("memory.log","w");
     TA=(int*)malloc(all_processes*sizeof(int));
     WTA=(float*)malloc(all_processes*sizeof(float));
     while(1){
@@ -281,32 +183,47 @@ int main(int argc, char * argv[])
             Process.start_time=-1;
             Process.remaining_time=Process.runningtime;
             Process.state=0;
-            int pid=fork();
-            if(pid==0)
-            {
-                //printf("process %d started at time %d\n",Process.id,getClk());
-                char str[12];
-                num_to_str(str,Process.runningtime);
-                char *args[]={"./process.out",str,NULL};
-                execv(args[0],args);
-            }
-            else
-            {
-                Process.pid=pid;
-            }
-            kill(pid,SIGSTOP);
-            int priority=0;
-            if(argv[1][0]=='H')
-            {
-                priority=Process.priority;
-            }
-            if(argv[1][0]=='S')
-            {
-               priority=Process.remaining_time;
-            }
-            enqueue(&q,Process,priority);
+            Process.memsize=Process_recieved.memsize;
+            insert_waiting_list(Process);
         }
-       // print_queue(q);
+        //check if any process in the waiting list can be allocated in memory
+        for(int i=0;i<waiting_list_size;i++) //the complexity here is legendary
+        {
+            struct process Process=waiting_list[i];
+            struct mem_node* inserted=insert_process(head,Process.memsize,Process.id);
+            if(inserted!=NULL)
+            {
+                fprintf(scheduler_mem,"At time %d allocated %d bytes for process %d from %d to %d\n",current_time,Process.memsize,Process.id,inserted->start,inserted->end);
+                int pid=fork();
+                if(pid==0)
+                {
+                    char str[12];
+                    num_to_str(str,Process.runningtime);
+                    char *args[]={"./process.out",str,NULL};
+                    execv(args[0],args);
+                }
+                else
+                {
+                    Process.pid=pid;
+                }
+                kill(pid,SIGSTOP);
+                int priority=0;
+                if(argv[1][0]=='H')
+                {
+                    priority=Process.priority;
+                }
+                if(argv[1][0]=='S')
+                {
+                priority=Process.remaining_time;
+                }
+                printf("inserting process %d with priority %d\n",Process.id,priority);
+                enqueue(&q,Process,priority);
+                print_queue(q);
+                //remove inserted node from waiting list
+                remove_waiting_list(i);
+                i--;
+            }
+        }
         
         if(previous_time!=current_time) //if a time step occured instruct a process to decrement its remaining time
         {
@@ -320,7 +237,7 @@ int main(int argc, char * argv[])
                 }
             }
         }
-        if(Process_recieved.id==-2 && q.n==0 && currently_running.id==-1)
+        if(Process_recieved.id==-2 && q.n==0 && currently_running.id==-1 && waiting_list_size==0)
         {
             //i finished btw
             printf("number of finished processes %d\n",finished_process);
@@ -348,6 +265,7 @@ int main(int argc, char * argv[])
             fprintf(scheduler_perf,"Avg Waiting = %.2f\n",avg_waiting_time);
             fprintf(scheduler_perf,"Std WTA = %.2f\n",std_turnaround_time);
             fclose(scheduler_perf);
+            fclose(scheduler_mem);
             break;
         }
         if(argv[1][0]=='H')

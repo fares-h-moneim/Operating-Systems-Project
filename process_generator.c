@@ -6,6 +6,7 @@ struct process
     int priority;
     int runningtime;
     int id;
+    int memsize;
 };
 struct msgbuff
 {
@@ -47,7 +48,7 @@ int readInput(struct process **processes)
         {
             continue;
         }
-        sscanf(line,"%d\t%d\t%d\t%d",&((*processes)[i].id),&((*processes)[i].arrivaltime),&((*processes)[i].runningtime),&((*processes)[i].priority));
+        sscanf(line,"%d\t%d\t%d\t%d\t%d",&((*processes)[i].id),&((*processes)[i].arrivaltime),&((*processes)[i].runningtime),&((*processes)[i].priority),&((*processes)[i].memsize));
         i++;
     }
     return count;
@@ -143,6 +144,7 @@ int main(int argc, char * argv[])
 
 void clearResources(int signum)
 {
+    printf("clearing resources\n");
     kill(schedulerpid,SIGINT);
     destroyClk(true);
     free(processes);
